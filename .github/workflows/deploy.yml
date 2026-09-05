@@ -1,0 +1,93 @@
+# Build dist/ and deploy it to Cloudflare Pages.
+#
+# Deploys from master, this repo's default branch. Everything the phone sees
+# comes from here, so pushing to master is publishing.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   CLOUDFLARE_API_TOKEN     a token with the "Cloudflare Pages: Edit" permission
+#   CLOUDFLARE_ACCOUNT_ID    from the Cloudflare dashboard sidebar
+#
+# Required Pages environment variable, set once in the dashboard, encrypted:
+#   APP_PASSWORD             the shared password the gate checks
+#
+# APP_PASSWORD is deliberately NOT a GitHub secret: it belongs to the running
+# worker, not to the build, and nothing in this workflow should ever see it.
+
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'public/**'
+      - 'tools/**'
+      - 'test/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# A push while a deploy is running supersedes it; never race two deploys.
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # No install step: the app and its tests have zero dependencies.
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      # Standard library only, likewise.
+
+      # The password gate is the only thing between the URL and the recipes,
+      # and every way it fails is silent. It gets tested before it ships.
+      - name: Tests
+        run: |
+          node test/db.test.js
+          node test/sw.test.js
+          node test/worker.test.js
+
+      # Copies public/ to dist/ and stamps sw.js's SHELL_VERSION with this
+      # commit, so installed phones cannot keep serving the previous deploy.
+      - name: Build
+        run: python tools/build.py --commit "$GITHUB_SHA"
+
+      # Every required file present and non-empty, the manifest parses and its
+      # icons exist, SHELL_VERSION stamped with this commit, no dev leftovers,
+      # and nothing in dist/ missing from the service worker's precache list.
+      # Reports every problem at once.
+      - name: Verify the deploy artifact
+        run: python tools/verify_dist.py --expect-commit "$GITHUB_SHA"
+
+      # `pages deploy` refuses to create a missing project without a TTY, so
+      # creating it here means the project never has to be made by hand.
+      # Already-exists is the normal case, hence continue-on-error.
+      - name: Ensure the Pages project exists
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages project create recipes-app --production-branch=master
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=recipes-app

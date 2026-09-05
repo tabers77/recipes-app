@@ -106,7 +106,7 @@ IndexedDB version bump.
 |---|---|---|
 | **1** | IndexedDB CRUD, category filter, search, link refs, JSON export/import | Yes, on the laptop |
 | **2** | PWA: service worker, manifest, icons, update prompt | Yes, offline |
-| 3 | Cloudflare Pages project, password gate, CI deploy | Yes, from anywhere |
+| **3** | Cloudflare Pages project, password gate, CI deploy | Yes, from anywhere |
 | 4 | Google Drive sync | Multi-device |
 | 5 | Photos, import-from-URL, export to Markdown | — |
 
@@ -127,6 +127,19 @@ quiz app rather than rediscovered:
 `SHELL_VERSION` is hand-edited until Phase 3 stamps it in CI. Forgetting to bump
 it is the one way to leave a phone on stale code silently, so Phase 3 must also
 add a check that fails the deploy if it was not stamped.
+
+**Phase 3 notes.** `_worker.js` is the vault quiz app's gate with the cookie
+renamed. The service worker gained `isAuthChallenge()` at the same time, and
+that closes a real hole: `isLoginPage()` only inspects file extensions, so a
+login page served at the app root -- where it and the real app are both
+`text/html` -- would have been precached **as the app shell**, leaving the app
+gone until site data was cleared. The gate now stamps `x-recipes-auth: required`
+on every challenge and the service worker refuses to cache anything carrying it.
+
+The password is a Pages environment variable, never a GitHub secret: it belongs
+to the running worker, not to the build, and nothing in CI should see it. The
+consequence is that the first deploy answers 500 until it is set -- the
+fail-closed rule working as intended, not a broken deploy.
 
 **Why export/import is in Phase 1 and not Phase 5:** between Phase 1 and Phase 4
 the only copy of the data is IndexedDB in one browser profile. Clearing site

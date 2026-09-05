@@ -5,8 +5,8 @@ link references, on a phone, in a kitchen, with bad wifi.
 
 Design and phasing live in [PLAN.md](PLAN.md).
 
-**Status:** Phases 1-2 complete - local CRUD on IndexedDB, installable and
-fully offline. Not yet deployed, not yet synced to Drive.
+**Status:** Phases 1-3 complete - local CRUD on IndexedDB, installable, fully
+offline, and deployable behind a password gate. Not yet synced to Drive.
 
 ## Run it
 
@@ -21,8 +21,9 @@ Then open <http://localhost:8000>.
 ## Test
 
 ```bash
-node test/db.test.js    # 14 assertions
-node test/sw.test.js    # 17 assertions
+node test/db.test.js        # 14 assertions
+node test/sw.test.js        # 19 assertions
+node test/worker.test.js    # 25 assertions
 ```
 
 `db.test.js` runs `public/db.js` against an in-memory IndexedDB fake: record
@@ -35,10 +36,17 @@ month's app and says nothing - so the install/activate/fetch rules are asserted
 rather than eyeballed. It also fails if a file in `public/` is missing from
 `SHELL_FILES`, which would otherwise break offline for that asset alone.
 
+`worker.test.js` runs `public/_worker.js`, the password gate. It is the only
+thing between the URL and the recipes and every way it fails is silent, so the
+suite asserts fail-closed behaviour, that nothing reaches the assets without a
+valid cookie, and that forged, expired, stretched-expiry, wrong-password and
+wrong-name cookies are all rejected.
+
 ## Layout
 
 ```
 public/
+  _worker.js            password gate; runs on Cloudflare, not in the browser
   index.html            three screens: list, detail, editor
   app.js                routing, rendering, form handling, SW registration
   db.js                 IndexedDB wrapper - the only thing that touches storage
@@ -49,8 +57,14 @@ public/
 test/
   db.test.js
   sw.test.js
+  worker.test.js
 tools/
+  build.py              public/ -> dist/, stamping SHELL_VERSION
+  verify_dist.py        pre-deploy gate
   make_icons.py         regenerates the icons; not part of any build
+.github/workflows/
+  deploy.yml            test -> build -> verify -> Cloudflare Pages
+dist/                   generated, gitignored -- never edit it
 PLAN.md
 ```
 
@@ -63,23 +77,68 @@ destroys it. Use *Menu -> Export JSON backup* if you enter anything you would
 mind losing. Import merges by last-write-wins, so re-importing an old backup
 cannot overwrite newer edits or resurrect a deleted recipe.
 
+## One-time deploy setup
+
+About ten minutes, all on the free tier, no card required at any point.
+**Do not enable Cloudflare Zero Trust / Access** - it demands a card on file and
+a standing charge authorization even on the free plan. `_worker.js` is what
+replaces it.
+
+1. **Cloudflare API token.** My Profile > API Tokens > Create Token > Custom
+   token. One permission: *Account > Cloudflare Pages > Edit*.
+2. **Account ID.** In the Cloudflare dashboard sidebar.
+3. **GitHub secrets.** Repo Settings > Secrets and variables > Actions, add
+   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+4. **Push to `master`.** The workflow creates the Pages project and deploys.
+5. **Set the password.** Cloudflare dashboard > Workers & Pages > `recipes-app`
+   > Settings > Environment variables > Production. Add `APP_PASSWORD`, marked
+   **encrypted**. Then redeploy (re-run the workflow, or push again).
+
+**Step 5 comes after the first deploy, so the first deploy will answer HTTP 500
+for everything.** That is correct: the gate fails closed, because a missing
+secret must never mean "serve everything to everyone". Setting `APP_PASSWORD`
+and redeploying fixes it.
+
+`APP_PASSWORD` is deliberately not a GitHub secret. It belongs to the running
+worker, not to the build, and nothing in the workflow should ever see it.
+Rotating it invalidates every existing session, since it is also the key the
+session cookie is signed with.
+
+## Deploying
+
+Push to `master`. CI runs the tests, then:
+
+```bash
+python tools/build.py --commit <sha>
+python tools/verify_dist.py --expect-commit <sha>
+```
+
+`verify_dist.py` fails the deploy if `SHELL_VERSION` was not stamped, if
+`_worker.js` is missing (which would serve every recipe to anyone with the URL),
+or if a file in `dist/` is absent from the service worker's precache list.
+
 ## Installing it on a phone
+
+Open the deployed `*.pages.dev` URL, enter the password, then use the browser's
+Add to Home Screen. Pages supplies the HTTPS that service workers require.
 
 Service workers need a secure context, so **a plain-HTTP LAN address will not
 work** - `navigator.serviceWorker` is simply absent there and the app runs
-online-only. That is expected, not a bug; the app degrades cleanly. Offline and
-Add to Home Screen become testable in Phase 3, when Cloudflare Pages supplies
-HTTPS.
+online-only. That is expected, not a bug; the app degrades cleanly. `localhost`
+does count as secure, so the worker can be exercised on the laptop.
 
-`localhost` counts as secure, so the service worker can be exercised on the
-laptop today.
+The gate applies to network fetches only. Once the shell is cached, offline use
+continues without re-authenticating - which is the point, and also means **an
+unlocked stolen phone can read the recipes**. Accepted: they are recipes.
 
 ## Updating a running install
 
-`SHELL_VERSION` in `sw.js` names the cache. **Bump it whenever a file in
-`public/` changes** - an unchanged key means installed phones keep serving the
-old app forever, silently. Phase 3 stamps it with the git commit in CI; until
-then it is hand-edited and this is the failure mode to watch.
+`SHELL_VERSION` in `sw.js` names the cache; an unchanged key means installed
+phones keep serving the old app forever, silently. `tools/build.py` stamps it
+with the deploying commit and `verify_dist.py` fails the deploy if it was not
+stamped, so this cannot be forgotten. The source file keeps the `v1`
+placeholder and only `dist/` is stamped, so local work is not churning cache
+names on every commit.
 
 A waiting worker does not take over on its own. The app shows a "new version is
 ready" bar and reloads only when tapped, so an update cannot swap the app out

@@ -29,11 +29,23 @@ var SHELL_FILES = [
   './icons/icon-512-maskable.png'
 ];
 
-/* From Phase 3 the app sits behind the password-gate worker, which answers an
+/* The app sits behind the password-gate worker (_worker.js), which answers an
    expired session with 200 + an HTML login page rather than a 401. Caching that
    would pin the login screen in place of the app until site data is cleared.
-   HTML where a script, stylesheet, icon or manifest was requested is an
-   interstitial, not the asset. */
+ *
+ * Two independent detectors, because neither alone is enough:
+ *
+ *   isAuthChallenge  reads the header the gate stamps on every challenge. This
+ *                    is the one that matters at './', where a login page and
+ *                    the real app are both text/html and indistinguishable by
+ *                    content type.
+ *   isLoginPage      HTML where a script, stylesheet, icon or manifest was
+ *                    asked for. A backstop for any hop that drops the header.
+ */
+function isAuthChallenge(response) {
+  return response.headers.get('x-recipes-auth') === 'required';
+}
+
 function isLoginPage(url, response) {
   if (/\.(js|css|png|webmanifest)$/.test(url)) {
     var type = response.headers.get('content-type') || '';
@@ -55,7 +67,7 @@ function precache(cache, url) {
       if (!response || !response.ok) {
         throw new Error('precache failed (' + (response && response.status) + '): ' + url);
       }
-      if (isLoginPage(url, response)) {
+      if (isAuthChallenge(response) || isLoginPage(url, response)) {
         throw new Error('precache got an auth page, not the asset: ' + url);
       }
       return response.blob().then(function (body) {
@@ -121,7 +133,8 @@ self.addEventListener('fetch', function (event) {
       if (cached) return cached;
       return fetch(request).then(function (response) {
         // Only same-origin successes are worth storing, and never a login page.
-        if (response && response.ok && !isLoginPage(request.url, response)) {
+        if (response && response.ok &&
+            !isAuthChallenge(response) && !isLoginPage(request.url, response)) {
           var copy = response.clone();
           caches.open(SHELL_CACHE).then(function (cache) { cache.put(request, copy); });
         }

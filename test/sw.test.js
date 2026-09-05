@@ -289,6 +289,38 @@ async function test(name, fn) {
       'a login page was cached in place of the asset');
   });
 
+  await test('install refuses a login page served at ./, where content type cannot tell', async () => {
+    // The gate answers an expired session with 200 + HTML. At './' that is
+    // indistinguishable from the real app by content type, so the only signal
+    // is the header the gate stamps. Without this check the login screen gets
+    // precached AS the app shell and the app is gone until site data is wiped.
+    const env = makeEnv({
+      routes: okRoutes({
+        './': () => new Response('<html>sign in</html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html', 'x-recipes-auth': 'required' }
+        })
+      })
+    });
+    await assert.rejects(fireInstall(env), /auth page/);
+  });
+
+  await test('an auth-challenge response is served but never cached', async () => {
+    const env = makeEnv({
+      routes: okRoutes({
+        [ORIGIN + '/late.js']: () => new Response('<html>sign in</html>', {
+          status: 200,
+          headers: { 'content-type': 'text/javascript', 'x-recipes-auth': 'required' }
+        })
+      })
+    });
+    await fireInstall(env);
+    await fireFetch(env, { method: 'GET', url: ORIGIN + '/late.js', mode: 'no-cors' });
+    await new Promise((r) => setTimeout(r, 0));
+    assert.ok(!env.caches.get('recipes-shell-v1').has(abs('/late.js')),
+      'an auth challenge was cached in place of the asset');
+  });
+
   await test('SHELL_FILES covers every file actually in public/', () => {
     // Drift guard. Adding a file to public/ and forgetting to list it in sw.js
     // breaks offline for that asset only -- which looks fine on a desktop with
@@ -307,7 +339,8 @@ async function test(name, fn) {
     }
     const exempt = new Set([
       './sw.js',          // a service worker must not cache itself
-      './index.html'      // precached as './' -- see the comment in sw.js
+      './index.html',     // precached as './' -- see the comment in sw.js
+      './_worker.js'      // runs server-side; the browser never fetches it
     ]);
     const missing = onDisk.filter((f) => !exempt.has(f) && !listed.has(f));
     assert.deepStrictEqual(missing, [],
