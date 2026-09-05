@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1b1a17">
+  <title>Recipes</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============================================================ list -->
+<section id="screen-list" class="screen">
+  <header class="bar">
+    <h1>Recipes</h1>
+    <div class="bar-actions">
+      <button id="btn-menu" class="icon-btn" aria-label="Menu" aria-expanded="false">&#8942;</button>
+      <button id="btn-new" class="icon-btn primary" aria-label="New recipe">+</button>
+    </div>
+  </header>
+
+  <div id="menu" class="menu" hidden>
+    <button id="btn-export" type="button">Export JSON backup</button>
+    <button id="btn-import" type="button">Import JSON backup</button>
+    <input id="file-import" type="file" accept="application/json,.json" hidden>
+  </div>
+
+  <div class="controls">
+    <input id="search" type="search" placeholder="Search title, ingredient, category" autocomplete="off">
+    <div id="chips" class="chips"></div>
+  </div>
+
+  <p id="list-count" class="count"></p>
+  <ul id="list" class="list"></ul>
+  <p id="list-empty" class="empty" hidden></p>
+</section>
+
+<!-- ========================================================== detail -->
+<section id="screen-detail" class="screen" hidden>
+  <header class="bar">
+    <button class="icon-btn back" data-back aria-label="Back">&#8592;</button>
+    <div class="bar-actions">
+      <button id="btn-edit" class="text-btn">Edit</button>
+      <button id="btn-delete" class="text-btn danger">Delete</button>
+    </div>
+  </header>
+  <article id="detail" class="detail"></article>
+</section>
+
+<!-- ========================================================== editor -->
+<section id="screen-editor" class="screen" hidden>
+  <header class="bar">
+    <button class="icon-btn back" data-back aria-label="Cancel">&#8592;</button>
+    <h2 id="editor-title">New recipe</h2>
+    <div class="bar-actions">
+      <button id="btn-save" class="text-btn primary">Save</button>
+    </div>
+  </header>
+
+  <form id="editor" class="editor" novalidate>
+    <label>Title
+      <input name="title" type="text" required autocomplete="off">
+    </label>
+
+    <label>Categories <span class="hint">comma separated</span>
+      <input name="categories" type="text" autocomplete="off" placeholder="Pasta, Quick, Vegetarian">
+    </label>
+
+    <div class="row">
+      <label>Servings
+        <input name="servings" type="number" min="1" inputmode="numeric">
+      </label>
+      <label>Minutes
+        <input name="timeMinutes" type="number" min="1" inputmode="numeric">
+      </label>
+    </div>
+
+    <label>Ingredients <span class="hint">one per line</span>
+      <textarea name="ingredients" rows="7"></textarea>
+    </label>
+
+    <label>Steps <span class="hint">one per line</span>
+      <textarea name="steps" rows="9"></textarea>
+    </label>
+
+    <label>Links <span class="hint">one per line &mdash; <code>label | https://url</code></span>
+      <textarea name="links" rows="3"></textarea>
+    </label>
+
+    <label>Notes
+      <textarea name="notes" rows="4"></textarea>
+    </label>
+
+    <p id="editor-error" class="error" hidden></p>
+  </form>
+</section>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="db.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
