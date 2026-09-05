@@ -3,8 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#1b1a17">
+  <!-- Two theme-colors so the phone's status bar matches the app in both
+       schemes rather than being dark-on-light or light-on-dark. -->
+  <meta name="theme-color" content="#faf7f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1b1a17" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="My cooking recipes. Works offline.">
   <title>Recipes</title>
+
+  <link rel="manifest" href="manifest.webmanifest">
+  <!-- iOS ignores the manifest's icons for Add to Home Screen. -->
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Recipes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -96,6 +108,14 @@
 </section>
 
 <div id="toast" class="toast" hidden></div>
+
+<!-- Shown when a new service worker is waiting. Deliberately a prompt rather
+     than an automatic reload: swapping the app out mid-edit would lose the
+     editor's unsaved contents. -->
+<div id="update-bar" class="update-bar" hidden>
+  <span>A new version is ready.</span>
+  <button id="btn-update" type="button">Reload</button>
+</div>
 
 <script src="db.js"></script>
 <script src="app.js"></script>

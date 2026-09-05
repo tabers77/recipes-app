@@ -346,6 +346,53 @@ async function importJson(file) {
   }
 }
 
+// ------------------------------------------------------------ service worker
+/* Registration is entirely optional. Service workers need a secure context, so
+   on a plain-HTTP LAN address -- which is how you reach a dev server from a
+   phone -- navigator.serviceWorker is simply absent. The app then runs
+   online-only, which is correct behaviour, not an error to report. */
+function registerWorker() {
+  if (!('serviceWorker' in navigator)) return;
+
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading) return;      // controllerchange can fire more than once
+    reloading = true;
+    location.reload();
+  });
+
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    // A worker may already be waiting from a previous visit.
+    if (reg.waiting && navigator.serviceWorker.controller) offerUpdate(reg);
+
+    reg.addEventListener('updatefound', () => {
+      const incoming = reg.installing;
+      if (!incoming) return;
+      incoming.addEventListener('statechange', () => {
+        // No existing controller means this is the first install, not an
+        // update -- there is nothing for the user to decide.
+        if (incoming.state === 'installed' && navigator.serviceWorker.controller) {
+          offerUpdate(reg);
+        }
+      });
+    });
+  }).catch(() => {
+    /* Registration can fail for reasons the user cannot act on (private mode,
+       an unsupported context). The app works without it. */
+  });
+}
+
+function offerUpdate(reg) {
+  const bar = el('update-bar');
+  bar.hidden = false;
+  el('btn-update').onclick = () => {
+    bar.hidden = true;
+    // The worker calls skipWaiting, which fires controllerchange, which
+    // reloads. Reloading here instead would just re-serve the old shell.
+    if (reg.waiting) reg.waiting.postMessage('skip-waiting');
+  };
+}
+
 // ---------------------------------------------------------------- wiring
 function init() {
   el('btn-new').addEventListener('click', () => { location.hash = '#/new'; });
@@ -400,6 +447,7 @@ function init() {
 
   window.addEventListener('hashchange', route);
   route();
+  registerWorker();
 }
 
 init();

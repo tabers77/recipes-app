@@ -105,13 +105,28 @@ IndexedDB version bump.
 | Phase | Deliverable | Usable? |
 |---|---|---|
 | **1** | IndexedDB CRUD, category filter, search, link refs, JSON export/import | Yes, on the laptop |
-| 2 | PWA: service worker, manifest, offline, add-to-home-screen | Yes, on the phone offline |
+| **2** | PWA: service worker, manifest, icons, update prompt | Yes, offline |
 | 3 | Cloudflare Pages project, password gate, CI deploy | Yes, from anywhere |
 | 4 | Google Drive sync | Multi-device |
 | 5 | Photos, import-from-URL, export to Markdown | — |
 
 Sync is deliberately last. The schema will churn during Phase 1, and each change
 is free until sync exists to constrain it.
+
+**Phase 2 notes.** One cache, cache-first, versioned by `SHELL_VERSION` -- there
+is no data file to keep fresh, because the recipes live in IndexedDB and the
+service worker never touches it. Two things were carried over from the vault
+quiz app rather than rediscovered:
+
+- Precache `'./'`, never `'./index.html'`. Pages 308s one to the other, and a
+  cached redirected response cannot answer a navigation at all.
+- Reject HTML served where a script, stylesheet or icon was requested. From
+  Phase 3 the password gate answers an expired session with 200 + a login page,
+  and caching that would pin the login screen in place of the app.
+
+`SHELL_VERSION` is hand-edited until Phase 3 stamps it in CI. Forgetting to bump
+it is the one way to leave a phone on stale code silently, so Phase 3 must also
+add a check that fails the deploy if it was not stamped.
 
 **Why export/import is in Phase 1 and not Phase 5:** between Phase 1 and Phase 4
 the only copy of the data is IndexedDB in one browser profile. Clearing site
