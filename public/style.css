@@ -271,3 +271,13 @@ button { font: inherit; cursor: pointer; }
   color: #fff;
   font-weight: 600;
 }
+
+/* ----------------------------------------------------------- sync status */
+.sync-status {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.sync-status.is-error { color: var(--danger); }
+.sync-status.is-busy { opacity: .7; }

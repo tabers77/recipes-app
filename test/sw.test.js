@@ -91,11 +91,15 @@ function makeEnv(options) {
   return { self: self_, caches: caches_, cachesStub, fetched, listeners, wrap };
 }
 
+/* Read out of sw.js rather than copied, so adding a shell file cannot leave
+   this fixture quietly behind and turn a real drift into a red test here. */
+const SHELL_FILES = SRC
+  .slice(SRC.indexOf('var SHELL_FILES = ['), SRC.indexOf('];', SRC.indexOf('var SHELL_FILES = [')))
+  .match(/'([^']+)'/g).map((q) => q.slice(1, -1));
+
 /* Every shell file resolves to a plausible asset. */
 function okRoutes(overrides) {
-  const files = ['./', './app.js', './db.js', './style.css', './manifest.webmanifest',
-    './icons/icon-192.png', './icons/icon-512.png',
-    './icons/icon-192-maskable.png', './icons/icon-512-maskable.png'];
+  const files = SHELL_FILES;
   const routes = {};
   for (const f of files) {
     const type = f.endsWith('.js') ? 'text/javascript'
@@ -147,7 +151,8 @@ async function test(name, fn) {
     await fireInstall(env);
     const shell = env.caches.get('recipes-shell-v1');
     assert.ok(shell, 'shell cache was not created');
-    assert.strictEqual(shell.size, 9, 'cached ' + shell.size + ' of 9 shell files');
+    assert.strictEqual(shell.size, SHELL_FILES.length,
+      'cached ' + shell.size + ' of ' + SHELL_FILES.length + ' shell files');
     assert.ok(shell.has(abs('./')), "'./' was not precached");
   });
 

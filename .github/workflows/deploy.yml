@@ -61,6 +61,7 @@ jobs:
           node test/db.test.js
           node test/sw.test.js
           node test/worker.test.js
+          node test/drive.test.js
 
       # Copies public/ to dist/ and stamps sw.js's SHELL_VERSION with this
       # commit, so installed phones cannot keep serving the previous deploy.

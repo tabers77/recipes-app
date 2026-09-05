@@ -20,7 +20,9 @@ var SHELL_CACHE = 'recipes-shell-' + SHELL_VERSION;
 var SHELL_FILES = [
   './',
   './app.js',
+  './config.js',
   './db.js',
+  './drive.js',
   './style.css',
   './manifest.webmanifest',
   './icons/icon-192.png',

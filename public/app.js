@@ -295,6 +295,7 @@ async function save() {
 
   const saved = await DB.save(record);
   await refresh();
+  syncSoon();
   toast(editingId ? 'Saved' : 'Recipe added');
   // replace, not assign: going back from the detail view should land on the
   // list, not re-open the editor that was just submitted.
@@ -308,6 +309,7 @@ async function del() {
   if (!confirm('Delete "' + (r.title || 'Untitled') + '"?')) return;
   await DB.remove(id);
   await refresh();
+  syncSoon();
   toast('Deleted');
   location.replace('#/');
 }
@@ -340,10 +342,71 @@ async function importJson(file) {
     // backup cannot clobber newer local edits.
     const r = await DB.importAll(list);
     await refresh();
+    if (r.added || r.updated) syncSoon();
     toast(r.added + ' added, ' + r.updated + ' updated, ' + r.skipped + ' unchanged');
   } catch (e) {
     toast('Import failed: ' + e.message);
   }
+}
+
+// -------------------------------------------------------------------- sync
+/* Sync is never in the path of a user action: a save writes to IndexedDB and
+   returns, and this runs afterwards. So every failure here is a status line,
+   never a blocked edit and never a dialog. */
+let syncTimer = null;
+
+function renderSyncStatus() {
+  const node = el('sync-status');
+  const s = Drive.status();
+
+  if (s.phase === 'unconfigured') {
+    // Nothing is set up and nothing is broken. Saying so would be noise.
+    node.hidden = true;
+    return;
+  }
+
+  const when = s.lastSyncedAt ? relativeTime(s.lastSyncedAt) : null;
+  let text;
+  if (s.phase === 'syncing') text = 'Syncing\u2026';
+  else if (s.phase === 'offline') text = when ? 'Offline \u00b7 last synced ' + when : 'Offline';
+  else if (s.phase === 'error') text = 'Not synced \u2014 ' + s.error;
+  else if (s.phase === 'retry') text = 'Will retry \u2014 ' + s.error;
+  else if (when) text = 'Synced ' + when;
+  else text = '';
+
+  node.textContent = text;
+  node.className = 'sync-status' +
+    (s.phase === 'error' ? ' is-error' : '') +
+    (s.phase === 'syncing' ? ' is-busy' : '');
+  node.hidden = !text;
+}
+
+function relativeTime(iso) {
+  const seconds = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return Math.round(seconds / 60) + 'm ago';
+  if (seconds < 86400) return Math.round(seconds / 3600) + 'h ago';
+  return Math.round(seconds / 86400) + 'd ago';
+}
+
+/* interactive: true may open a Google popup, so it is only ever reached from a
+   tap. Everything automatic passes false and stays silent. */
+async function syncNow(interactive) {
+  if (!Drive.isConfigured()) {
+    if (interactive) toast('Google Drive is not configured yet \u2014 see README');
+    return;
+  }
+  renderSyncStatus();
+  await Drive.sync(interactive);
+  // The merge may have pulled records in, so the list is redrawn either way.
+  await refresh();
+  renderSyncStatus();
+}
+
+/* Coalesced: editing three recipes in a row is one upload, not three. */
+function syncSoon() {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => syncNow(false), 2500);
 }
 
 // ------------------------------------------------------------ service worker
@@ -411,6 +474,11 @@ function init() {
     el('menu').hidden = !opening;
     e.currentTarget.setAttribute('aria-expanded', String(opening));
   });
+  el('btn-sync').addEventListener('click', () => {
+    el('menu').hidden = true;
+    el('btn-menu').setAttribute('aria-expanded', 'false');
+    syncNow(true);
+  });
   el('btn-export').addEventListener('click', exportJson);
   el('btn-import').addEventListener('click', () => el('file-import').click());
   el('file-import').addEventListener('change', (e) => {
@@ -448,6 +516,12 @@ function init() {
   window.addEventListener('hashchange', route);
   route();
   registerWorker();
+
+  // A silent attempt on open, and again when the network comes back. Both
+  // no-op harmlessly when Drive is not configured.
+  syncNow(false);
+  window.addEventListener('online', () => syncNow(false));
+  window.addEventListener('offline', renderSyncStatus);
 }
 
 init();

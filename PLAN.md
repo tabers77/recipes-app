@@ -107,7 +107,7 @@ IndexedDB version bump.
 | **1** | IndexedDB CRUD, category filter, search, link refs, JSON export/import | Yes, on the laptop |
 | **2** | PWA: service worker, manifest, icons, update prompt | Yes, offline |
 | **3** | Cloudflare Pages project, password gate, CI deploy | Yes, from anywhere |
-| 4 | Google Drive sync | Multi-device |
+| **4** | Google Drive sync | Multi-device |
 | 5 | Photos, import-from-URL, export to Markdown | — |
 
 Sync is deliberately last. The schema will churn during Phase 1, and each change
@@ -140,6 +140,24 @@ The password is a Pages environment variable, never a GitHub secret: it belongs
 to the running worker, not to the build, and nothing in CI should see it. The
 consequence is that the first deploy answers 500 until it is set -- the
 fail-closed rule working as intended, not a broken deploy.
+
+**Phase 4 notes.** Built as specified in section 4, with three decisions that
+were not obvious until the code existed:
+
+1. **A read only happens when the revision moved.** Binding stores the revision;
+   an unchanged one means nobody else wrote and the whole download is skipped.
+2. **The merge is applied locally before the push.** If the upload then fails,
+   the device keeps everything it learned and the next sync retries. Applying it
+   after would throw away a successful pull on a failed push.
+3. **On an exact `updatedAt` tie the tombstone wins.** A tie means the two edits
+   cannot be ordered; re-deleting is recoverable from a backup, a silent
+   resurrection is not.
+
+The residual race is stated rather than papered over: Drive has no
+compare-and-swap on upload, so the engine re-checks the revision immediately
+before writing and aborts if it moved. That narrows the window to the round trip
+itself and needs simultaneous edits on two devices to lose, with the loser's
+change still sitting in its own IndexedDB.
 
 **Why export/import is in Phase 1 and not Phase 5:** between Phase 1 and Phase 4
 the only copy of the data is IndexedDB in one browser profile. Clearing site

@@ -5,8 +5,8 @@ link references, on a phone, in a kitchen, with bad wifi.
 
 Design and phasing live in [PLAN.md](PLAN.md).
 
-**Status:** Phases 1-3 complete - local CRUD on IndexedDB, installable, fully
-offline, and deployable behind a password gate. Not yet synced to Drive.
+**Status:** Phases 1-4 complete - local CRUD on IndexedDB, installable, fully
+offline, deployable behind a password gate, and syncing to Google Drive.
 
 ## Run it
 
@@ -24,6 +24,7 @@ Then open <http://localhost:8000>.
 node test/db.test.js        # 14 assertions
 node test/sw.test.js        # 19 assertions
 node test/worker.test.js    # 25 assertions
+node test/drive.test.js     # 20 assertions
 ```
 
 `db.test.js` runs `public/db.js` against an in-memory IndexedDB fake: record
@@ -42,14 +43,22 @@ suite asserts fail-closed behaviour, that nothing reaches the assets without a
 valid cookie, and that forged, expired, stretched-expiry, wrong-password and
 wrong-name cookies are all rejected.
 
+`drive.test.js` runs the sync engine against an in-memory fake Drive - a
+revision counter and a JSON blob that can be changed behind the engine's back to
+stage a conflict. It covers the merge rules, tombstone handling, and that a
+remote write landing mid-sync aborts the push instead of overwriting it. OAuth
+and the real HTTP call shapes are not covered; those need a browser.
+
 ## Layout
 
 ```
 public/
   _worker.js            password gate; runs on Cloudflare, not in the browser
+  config.js             the OAuth client ID -- public by design
   index.html            three screens: list, detail, editor
   app.js                routing, rendering, form handling, SW registration
   db.js                 IndexedDB wrapper - the only thing that touches storage
+  drive.js              Google Drive sync: auth, merge, push
   style.css
   sw.js                 service worker: cache-first shell, versioned
   manifest.webmanifest
@@ -58,6 +67,7 @@ test/
   db.test.js
   sw.test.js
   worker.test.js
+  drive.test.js
 tools/
   build.py              public/ -> dist/, stamping SHELL_VERSION
   verify_dist.py        pre-deploy gate
@@ -68,14 +78,57 @@ dist/                   generated, gitignored -- never edit it
 PLAN.md
 ```
 
+## Google Drive setup
+
+About fifteen minutes, free, and the app works without it - Drive sync simply
+shows as unconfigured until `config.js` has a client ID.
+
+1. **Google Cloud project.** Create one, then enable the **Google Drive API**.
+   Decline the billing account it offers; the Drive API does not need one.
+2. **OAuth consent screen.** External. Add your own Google account as the sole
+   test user.
+3. **Credentials > OAuth client ID > Web application.** Under *Authorized
+   JavaScript origins* add `http://localhost:8000` and your production Pages
+   URL.
+4. **Paste the client ID into `public/config.js`** and deploy.
+
+Then open the app and use *Menu -> Sync with Google Drive*. It creates a
+`Recipes` folder in your Drive containing `recipes.json`.
+
+### Things that will surprise you
+
+- **Preview deploys break Drive auth.** Cloudflare gives every deploy its own
+  `*.pages.dev` hostname, and those will not match the authorized origins list.
+  Use the stable production URL. This is expected, not a bug.
+- **`drive.file` is create-scoped.** The app can only touch files it created.
+  Delete or recreate `recipes.json` by hand in Drive and the app loses access to
+  it; the next sync rebinds to a new file and pushes the local set.
+- **Tokens last about an hour** with no refresh token in this flow. Renewal is
+  silent while a Google session is live in that browser, so mostly you see
+  nothing; occasionally you tap sign-in again.
+- **Google sign-in needs the network.** Offline, sync reports "Offline" and the
+  app carries on. Nothing is blocked.
+
 ## Where the data is
 
-IndexedDB, in the browser you used, under the origin you served from.
+IndexedDB is the source of truth on each device; Drive holds one `recipes.json`
+that the devices reconcile against. Every edit is written locally and returns
+immediately - sync happens afterwards, in the background, and a failure is a
+status line rather than a blocked edit.
 
-**Until Phase 4 (Drive sync) that is the only copy.** Clearing site data
-destroys it. Use *Menu -> Export JSON backup* if you enter anything you would
-mind losing. Import merges by last-write-wins, so re-importing an old backup
-cannot overwrite newer edits or resurrect a deleted recipe.
+Conflicts resolve last-write-wins per recipe on `updatedAt`, with one deliberate
+asymmetry: on an exact timestamp tie the tombstone wins, because re-deleting is
+recoverable from a backup and a silent resurrection is not.
+
+Two residual risks worth knowing:
+
+- **Before you configure Drive, IndexedDB is the only copy.** Clearing site data
+  destroys it. *Menu -> Export JSON backup* is the stopgap; import merges rather
+  than replaces, so an old backup cannot overwrite newer edits.
+- **Drive has no compare-and-swap on upload.** The engine re-checks the revision
+  immediately before writing and aborts if it moved, which narrows but cannot
+  close the window. Losing it needs simultaneous edits on two devices, and the
+  loser's change survives in its own IndexedDB until its next sync.
 
 ## One-time deploy setup
 

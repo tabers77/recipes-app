@@ -170,4 +170,33 @@ async function importAll(records) {
   return { added, updated, skipped: incoming.length - added - updated };
 }
 
-window.DB = { all, allRaw, get, save, remove, importAll, normalize, newId, nowIso };
+// ---------------------------------------------------------------- sync meta
+/* Small durable key/value scratchpad for the sync engine: which Drive file we
+   are bound to, its revision at our last pull, when we last succeeded. Kept in
+   IndexedDB rather than localStorage so it cannot drift out of step with the
+   records it describes -- both survive or neither does. */
+async function metaGet(key, fallback) {
+  const row = await read('syncMeta', (store) => store.get(key));
+  return row ? row.value : fallback;
+}
+
+function metaSet(key, value) {
+  return write('syncMeta', (store) => { store.put({ key: key, value: value }); });
+}
+
+/* Write a merged set in one transaction. Used by the sync engine, where a
+   half-applied merge would leave the local store disagreeing with the revision
+   we are about to record as pulled. */
+function saveMany(records) {
+  const normalized = (records || []).map(normalize);
+  if (!normalized.length) return Promise.resolve(0);
+  return write('recipes', (store) => {
+    for (const rec of normalized) store.put(rec);
+  }).then(() => normalized.length);
+}
+
+window.DB = {
+  all, allRaw, get, save, saveMany, remove, importAll,
+  metaGet, metaSet,
+  normalize, newId, nowIso
+};
