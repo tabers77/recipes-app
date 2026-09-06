@@ -130,6 +130,28 @@ function loginPage(message, status) {
   });
 }
 
+/* Google sign-in opens a popup and then polls window.closed on it to notice
+ * when the user finishes or dismisses it. A Cross-Origin-Opener-Policy of
+ * same-origin severs that reference and the flow hangs, which the console
+ * reports as "Cross-Origin-Opener-Policy policy would block the window.closed
+ * call".
+ *
+ * same-origin-allow-popups is the value that keeps the isolation benefit for
+ * ordinary navigations while still letting a popup we opened talk back. Setting
+ * it explicitly means the app does not depend on whatever the host happens to
+ * default to. COEP is deliberately NOT set: it would block accounts.google.com
+ * from loading at all.
+ */
+function withPopupPolicy(response) {
+  const headers = new Headers(response.headers);
+  headers.set('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 // ---------------------------------------------------------------- handler
 export default {
   async fetch(request, env) {
@@ -172,7 +194,7 @@ export default {
     }
 
     if (await tokenIsValid(readCookie(request, COOKIE), password)) {
-      return env.ASSETS.fetch(request);
+      return withPopupPolicy(await env.ASSETS.fetch(request));
     }
 
     // Unauthenticated. A document request gets the login form; anything else

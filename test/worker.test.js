@@ -262,6 +262,15 @@ async function test(name, fn) {
     assert.strictEqual(assetReads.length, 0, 'an old session survived a password rotation');
   });
 
+  await test('authenticated responses allow the sign-in popup to be tracked', async () => {
+    /* Google sign-in polls window.closed on the popup it opened. A COOP of
+       same-origin severs that reference and the flow hangs. */
+    const { worker, env } = loadWorker();
+    const res = await worker.fetch(get('/', cookieHeader(await validToken(PASSWORD))), env);
+    assert.strictEqual(res.headers.get('cross-origin-opener-policy'), 'same-origin-allow-popups');
+    assert.strictEqual(await res.text(), 'the real app', 'the body was lost adding the header');
+  });
+
   // ------------------------------------------------------------------ report
   console.log('\n' + passed + ' passed, ' + failures.length + ' failed');
   for (const f of failures) console.log('  FAIL  ' + f);
