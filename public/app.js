@@ -374,6 +374,7 @@
     else if (s.phase === 'offline') text = when ? 'Offline \u00b7 last synced ' + when : 'Offline';
     else if (s.phase === 'error') text = 'Not synced \u2014 ' + s.error;
     else if (s.phase === 'retry') text = 'Will retry \u2014 ' + s.error;
+    else if (s.phase === 'disconnected') text = 'Not connected to Drive';
     else if (when) text = 'Synced ' + when;
     else text = '';
 
@@ -520,9 +521,10 @@
     route();
     registerWorker();
 
-    // A silent attempt on open, and again when the network comes back. Both
-    // no-op harmlessly when Drive is not configured.
-    syncNow(false);
+    // Warm up Google's script and restore whether this device has connected
+    // before, THEN attempt a silent sync. Loading GIS eagerly is what keeps a
+    // later Sync tap inside its user gesture, so the popup is not blocked.
+    Drive.init().then(function () { syncNow(false); });
     window.addEventListener('online', () => syncNow(false));
     window.addEventListener('offline', renderSyncStatus);
   }

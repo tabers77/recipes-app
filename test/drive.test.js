@@ -23,15 +23,31 @@ const T0 = Date.parse('2026-09-05T12:00:00.000Z');
 const DAY = 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------- the module
-function loadDrive() {
+/* scriptLoads records every <script> drive.js tries to append, so a test can
+   assert that nothing reached out to Google when it should not have. */
+function loadDrive(options) {
+  const opts = options || {};
+  const scriptLoads = [];
   const sandbox = {
-    window: {}, document: { createElement: () => ({}), head: { appendChild() {} } },
-    navigator: { onLine: true }, fetch: () => { throw new Error('no network in tests'); },
-    Date, Math, Map, JSON, Promise, console, setTimeout
+    document: {
+      createElement: () => {
+        const node = {};
+        Object.defineProperty(node, 'src', {
+          set(v) { scriptLoads.push(v); }, get() { return ''; }
+        });
+        return node;
+      },
+      head: { appendChild() {} }
+    },
+    navigator: { onLine: opts.online !== false },
+    fetch: () => { throw new Error('no network in tests'); },
+    Date, Math, Map, JSON, Promise, console, setTimeout, Number, Boolean, Object, Array, String
   };
+  sandbox.window = sandbox;          // window IS the global, as in a browser
   vm.createContext(sandbox);
   vm.runInContext(DRIVE_SRC, sandbox);
-  return sandbox.window.Drive.__test;
+  sandbox.RECIPES_CONFIG = opts.config || { googleClientId: '' };
+  return { api: sandbox.window.Drive, test: sandbox.window.Drive.__test, scriptLoads, sandbox };
 }
 
 // ------------------------------------------------------------------- fake db
@@ -115,7 +131,8 @@ async function test(name, fn) {
 
 // --------------------------------------------------------------------- tests
 (async () => {
-  const { mergeRecords, purgeOldTombstones, runSync } = loadDrive();
+  const { test: engine } = loadDrive();
+  const { mergeRecords, purgeOldTombstones, runSync } = engine;
 
   // ------------------------------------------------------------------ merge
   await test('merge takes the union when there is no overlap', () => {
@@ -296,6 +313,55 @@ async function test(name, fn) {
     const second = await runSync(api, db, T0 + 5000);
     assert.strictEqual(JSON.stringify(store.records), first, 'the file churned on a no-op sync');
     assert.strictEqual(second.pulled, 0, 'a no-op sync claimed to pull records');
+  });
+
+  // ------------------------------------------------------ connect / popup
+  await test('an automatic sync never reaches for a token before connecting', async () => {
+    /* The popup can only open during a user gesture. An automatic sync on page
+       load has none, so attempting one is guaranteed to be blocked and alarms
+       the user with a GSI popup-blocked error. */
+    const { api, sandbox, scriptLoads } = loadDrive({ config: { googleClientId: 'abc.apps.googleusercontent.com' } });
+    sandbox.DB = fakeDb([]);
+    const state = await api.sync(false);
+    assert.strictEqual(state.phase, 'disconnected', 'phase was ' + state.phase);
+    assert.deepStrictEqual(scriptLoads.filter((u) => /accounts\.google/.test(u)), [],
+      'an automatic sync tried to load Google sign-in');
+  });
+
+  await test('sync reports unconfigured when no client id is set', async () => {
+    const { api, sandbox } = loadDrive();          // empty googleClientId
+    sandbox.DB = fakeDb([]);
+    const state = await api.sync(false);
+    assert.strictEqual(state.phase, 'unconfigured');
+  });
+
+  await test('sync reports offline without touching auth', async () => {
+    const { api, sandbox, scriptLoads } = loadDrive({
+      online: false, config: { googleClientId: 'abc.apps.googleusercontent.com' }
+    });
+    sandbox.DB = fakeDb([]);
+    const state = await api.sync(true);
+    assert.strictEqual(state.phase, 'offline');
+    assert.deepStrictEqual(scriptLoads.filter((u) => /accounts\.google/.test(u)), [],
+      'tried to sign in while offline');
+  });
+
+  await test('init restores the connected flag and preloads Google sign-in', async () => {
+    const { api, sandbox, scriptLoads } = loadDrive({ config: { googleClientId: 'abc.apps.googleusercontent.com' } });
+    const db = fakeDb([]);
+    await db.metaSet('driveConnected', true);
+    sandbox.DB = db;
+
+    assert.strictEqual(await api.init(), true, 'the connected flag was not restored');
+    assert.ok(scriptLoads.some((u) => /accounts\.google\.com\/gsi\/client/.test(u)),
+      'sign-in was not preloaded, so the first tap would lose its gesture');
+  });
+
+  await test('init does nothing at all when Drive is unconfigured', async () => {
+    const { api, sandbox, scriptLoads } = loadDrive();
+    sandbox.DB = fakeDb([]);
+    assert.strictEqual(await api.init(), false);
+    assert.deepStrictEqual(scriptLoads, [], 'loaded Google sign-in with no client id');
   });
 
   // ------------------------------------------------------------------ report

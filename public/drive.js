@@ -165,63 +165,97 @@
     return Boolean(clientId());
   }
 
+  var gisPromise = null;
+
+  /* Loaded eagerly at startup, not on the first tap.
+   *
+   * A browser only allows window.open during a live user gesture, and that
+   * permission does not survive waiting for a script to download. Loading GIS
+   * lazily meant the very first "Sync" tap spent its gesture fetching
+   * accounts.google.com and the popup was blocked -- reported as
+   * "[GSI_LOGGER]: Failed to open popup window ... Maybe blocked by the
+   * browser?", which reads like a browser setting rather than our bug. */
   function loadGis() {
     if (window.google && window.google.accounts) return Promise.resolve();
-    return new Promise(function (resolve, reject) {
+    if (gisPromise) return gisPromise;
+    gisPromise = new Promise(function (resolve, reject) {
       var script = document.createElement('script');
       script.src = GIS_SRC;
       script.async = true;
       script.onload = resolve;
       // Offline, or a blocked third-party script. Not an error worth a stack
       // trace: the app works, it just cannot sync right now.
-      script.onerror = function () { reject(new Error('Google sign-in did not load')); };
+      script.onerror = function () {
+        gisPromise = null;
+        reject(new Error('Google sign-in did not load'));
+      };
       document.head.appendChild(script);
     });
+    return gisPromise;
   }
 
-  /* interactive=false attempts a silent grant, which succeeds whenever there is a
-     live Google session in this browser. Browser tokens last about an hour and
-     there is no refresh token in this flow, so this runs often and mostly
-     without the user seeing anything. */
-  function requestToken(interactive) {
-    return loadGis().then(function () {
-      return new Promise(function (resolve, reject) {
-        if (!tokenClient) {
-          tokenClient = window.google.accounts.oauth2.initTokenClient({
-            client_id: clientId(),
-            scope: SCOPE,
-            callback: function (response) {
-              if (response && response.access_token) {
-                accessToken = response.access_token;
-                tokenExpiry = Date.now() + (Number(response.expires_in || 3600) - 60) * 1000;
-                resolve(accessToken);
-              } else {
-                reject(new Error((response && response.error) || 'no access token'));
-              }
-            },
-            error_callback: function (err) {
-              reject(new Error((err && err.type) || 'sign-in was dismissed'));
-            }
-          });
-        } else {
-          tokenClient.callback = function (response) {
-            if (response && response.access_token) {
-              accessToken = response.access_token;
-              tokenExpiry = Date.now() + (Number(response.expires_in || 3600) - 60) * 1000;
-              resolve(accessToken);
-            } else {
-              reject(new Error((response && response.error) || 'no access token'));
-            }
-          };
-        }
-        tokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' });
-      });
+  /* Called from app start. Failure is ignored on purpose -- being offline must
+     not produce an error before the user has asked for anything. */
+  function preload() {
+    if (!isConfigured()) return;
+    loadGis().then(ensureClient, function () {});
+  }
+
+  function ensureClient() {
+    if (tokenClient || !(window.google && window.google.accounts)) return tokenClient;
+    tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId(),
+      scope: SCOPE,
+      callback: function (response) { settle(response, null); },
+      error_callback: function (err) { settle(null, err); }
     });
+    return tokenClient;
   }
 
-  function token(interactive) {
+  /* One pending grant at a time. The GIS client reports through the callbacks
+     it was constructed with, so the promise handlers live here rather than
+     being reassigned per call -- reassigning them is what makes a second
+     request silently resolve the first one's promise. */
+  var pending = null;
+
+  function settle(response, err) {
+    if (!pending) return;
+    var p = pending;
+    pending = null;
+    if (response && response.access_token) {
+      accessToken = response.access_token;
+      tokenExpiry = Date.now() + (Number(response.expires_in || 3600) - 60) * 1000;
+      p.resolve(accessToken);
+    } else {
+      p.reject(new Error(
+        (response && response.error) || (err && err.type) || 'sign-in was dismissed'));
+    }
+  }
+
+  /* MUST be reachable synchronously from a click handler. Anything awaited
+     before requestAccessToken costs the gesture and the popup is blocked. */
+  function requestToken() {
+    if (!ensureClient()) {
+      return Promise.reject(new Error('Google sign-in is not ready yet'));
+    }
+    if (pending) return pending.promise;
+
+    var p = {};
+    p.promise = new Promise(function (resolve, reject) {
+      p.resolve = resolve;
+      p.reject = reject;
+    });
+    pending = p;
+
+    // prompt '' rather than 'consent': Google shows the account chooser only
+    // when it needs to, instead of forcing re-consent on every single sync.
+    tokenClient.requestAccessToken({ prompt: '' });
+    return p.promise;
+  }
+
+  function token() {
     if (accessToken && Date.now() < tokenExpiry) return Promise.resolve(accessToken);
-    return requestToken(Boolean(interactive));
+    return requestToken();
   }
 
   // ---------------------------------------------------------------- drive api
@@ -230,7 +264,7 @@
     var response = await fetch(path, {
       method: opts.method || 'GET',
       headers: Object.assign(
-        { Authorization: 'Bearer ' + (await token(false)) },
+        { Authorization: 'Bearer ' + (await token()) },
         opts.headers || {}
       ),
       body: opts.body
@@ -243,7 +277,7 @@
       response = await fetch(path, {
         method: opts.method || 'GET',
         headers: Object.assign(
-          { Authorization: 'Bearer ' + (await token(false)) },
+          { Authorization: 'Bearer ' + (await token()) },
           opts.headers || {}
         ),
         body: opts.body
@@ -348,6 +382,7 @@
   // -------------------------------------------------------------------- public
   var state = { phase: 'idle', lastSyncedAt: null, error: null };
   var inFlight = null;
+  var connected = false;      // has the user ever granted access on this device
 
   function status() { return state; }
 
@@ -364,9 +399,22 @@
       return Promise.resolve(state);
     }
 
+    /* Automatic syncs never reach for a token before the user has connected
+       once. Without this the app tried to open a Google popup on page load,
+       with no gesture behind it -- guaranteed to be blocked, and alarming. */
+    if (!interactive && !connected) {
+      state = { phase: 'disconnected', lastSyncedAt: state.lastSyncedAt, error: null };
+      return Promise.resolve(state);
+    }
+
     state = { phase: 'syncing', lastSyncedAt: state.lastSyncedAt, error: null };
 
-    inFlight = token(interactive)
+    inFlight = token()
+      .then(function () {
+        // Remember, so later automatic syncs are allowed to run silently.
+        connected = true;
+        return window.DB.metaSet('driveConnected', true);
+      })
       .then(function () { return runSync(realApi, window.DB, Date.now()); })
       .then(function (result) {
         state = {
@@ -389,9 +437,20 @@
     return inFlight;
   }
 
+  /* Restores the connected flag and warms up GIS. Called once from app start. */
+  function init() {
+    if (!isConfigured()) return Promise.resolve(false);
+    preload();
+    return window.DB.metaGet('driveConnected', false).then(function (value) {
+      connected = Boolean(value);
+      return connected;
+    });
+  }
+
   window.Drive = {
     sync: sync,
     status: status,
+    init: init,
     isConfigured: isConfigured,
     // Exposed for tests: the merge rules and the orchestration are the parts
     // worth asserting, and neither should need a real Google account to run.
