@@ -13,10 +13,16 @@ offline, deployable behind a password gate, and syncing to Google Drive.
 No build step and no dependencies. Any static file server works:
 
 ```bash
-python -m http.server 8000 --directory public
+python -m http.server 8080 --directory public
 ```
 
-Then open <http://localhost:8000>.
+Then open <http://localhost:8080>.
+
+Port 8080 rather than 8000 because Docker Desktop and WSL hold 8000 on this
+machine. Windows reports that as `WinError 10013 ... forbidden by its access
+permissions`, which reads like a firewall problem but is just the port being
+taken. Any free port works - whichever you pick has to match the authorized
+JavaScript origin you register with Google below.
 
 ## Test
 
@@ -88,8 +94,8 @@ shows as unconfigured until `config.js` has a client ID.
 2. **OAuth consent screen.** External. Add your own Google account as the sole
    test user.
 3. **Credentials > OAuth client ID > Web application.** Under *Authorized
-   JavaScript origins* add `http://localhost:8000` and your production Pages
-   URL.
+   JavaScript origins* add `http://localhost:8080` (or whichever port you
+   serve on locally) and your production Pages URL.
 4. **Paste the client ID into `public/config.js`** and deploy.
 
 Then open the app and use *Menu -> Sync with Google Drive*. It creates a
