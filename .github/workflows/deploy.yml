@@ -45,7 +45,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
       # No install step: the app and its tests have zero dependencies.
 
       - name: Set up Python
@@ -75,20 +75,28 @@ jobs:
       - name: Verify the deploy artifact
         run: python tools/verify_dist.py --expect-commit "$GITHUB_SHA"
 
-      # `pages deploy` refuses to create a missing project without a TTY, so
-      # creating it here means the project never has to be made by hand.
-      # Already-exists is the normal case, hence continue-on-error.
+      # wrangler is invoked directly rather than through wrangler-action.
+      # The action produced "Running Wrangler Commands / Wrangler Action
+      # completed" with no wrangler output and no deployment URL, and still
+      # reported success -- a deploy that silently does nothing is worse than
+      # one that fails. npx prints everything and a non-zero exit fails the job.
+      - name: List existing Pages projects
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@latest pages project list
+
+      # Already-exists is the normal case and exits non-zero, hence the guard.
       - name: Ensure the Pages project exists
-        continue-on-error: true
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages project create recipes-app --production-branch=master
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@latest pages project create recipes-app             --production-branch=master || echo "project already exists, continuing"
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=recipes-app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@latest pages deploy dist             --project-name=recipes-app --branch=master
